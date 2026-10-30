@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Check Availability Trace Analyzer</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171e26; --border: #2a3441; --text: #d7dee8; --muted: #8592a3;
+    --error: #ff5c5c; --warn: #f5b942; --info: #4fa3ff; --ok: #3ecf8e;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; align-items: center; }
+  header h1 { font-size: 17px; margin: 0; }
+  header span { color: var(--muted); font-size: 12px; }
+  main { padding: 16px 20px; display: grid; gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .panel h2 { font-size: 15px; margin: 0 0 10px; }
+  textarea { width: 100%; height: 180px; background: #0b0f14; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font: 12px/1.4 ui-monospace, Menlo, monospace; resize: vertical; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  button, .btn { background: #2563eb; color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; cursor: pointer; font-size: 13px; }
+  button.secondary, .btn.secondary { background: #2a3441; }
+  input[type=text] { background: #0b0f14; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; min-width: 260px; }
+  input[type=file] { display: none; }
+  .err-msg { color: var(--error); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .stat { background: #0b0f14; border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  .stat b { display: block; font-size: 20px; }
+  .stat small { color: var(--muted); }
+  .finding { border-left: 4px solid var(--muted); background: #0b0f14; border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; }
+  .finding.error { border-color: var(--error); }
+  .finding.warn { border-color: var(--warn); }
+  .finding.info { border-color: var(--info); }
+  .finding.ok { border-color: var(--ok); }
+  .finding .title { font-weight: 600; }
+  .finding .meta { color: var(--muted); font-size: 12px; }
+  .finding ul { margin: 4px 0 0; padding-left: 18px; }
+  .finding .verify { color: #b9c6d6; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; margin-right: 6px; font-weight: 600; text-transform: uppercase; }
+  .badge.error { background: var(--error); color: #000; }
+  .badge.warn { background: var(--warn); color: #000; }
+  .badge.info { background: var(--info); color: #000; }
+  .badge.ok { background: var(--ok); color: #000; }
+  .cat { color: var(--muted); font-size: 12px; margin-right: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border-bottom: 1px solid var(--border); padding: 5px 6px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  td.mono, .mono { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  tr.drop td { background: rgba(245, 185, 66, .08); }
+  tr.zero td { background: rgba(255, 92, 92, .12); }
+  tr.root td { outline: 1px solid var(--error); }
+  .scroll { max-height: 560px; overflow: auto; }
+  .filters label { margin-right: 10px; cursor: pointer; }
+  details summary { cursor: pointer; color: var(--info); }
+  pre { margin: 4px 0 0; white-space: pre-wrap; font-size: 11px; color: #b9c6d6; }
+  .hidden { display: none; }
+  a.ref { color: var(--info); cursor: pointer; text-decoration: underline dotted; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Check Availability Trace Analyzer</h1>
+  <span>Phân tích trace evidence bằng rule if/else, không dùng AI. Dữ liệu chỉ xử lý trên trình duyệt.</span>
+</header>
+<main>
+  <section class="panel">
+    <h2>1. Dán JSON</h2>
+    <textarea id="input" placeholder='Dán response debug của check_availability (header x-debug-check-availability-trace: 1), hoặc mảng "trace", hoặc document log-aggregator (trace_steps snake_case)...'></textarea>
+    <div class="row">
+      <button id="btnAnalyze">Phân tích</button>
+      <label class="btn secondary" for="file">Chọn file JSON</label>
+      <input type="file" id="file" accept=".json,.txt,application/json" />
+      <button class="secondary" id="btnClear">Xoá</button>
+      <span id="parseError" class="err-msg"></span>
+    </div>
+  </section>
+
+  <section id="out" class="hidden">
+    <div class="panel">
+      <h2>2. Tổng quan</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>3. Các case cần verify</h2>
+      <div class="row filters" id="sevFilters">
+        <label><input type="checkbox" value="error" checked /> Error</label>
+        <label><input type="checkbox" value="warn" checked /> Warn</label>
+        <label><input type="checkbox" value="info" checked /> Info</label>
+        <label><input type="checkbox" value="ok" /> OK</label>
+      </div>
+      <div id="findings" style="margin-top:10px"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px" id="filterConfigPanel">
+      <h2>Filter config (filter_hotel_configs)</h2>
+      <div id="filterConfig"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px" id="providerPanel">
+      <h2>4. Provider search</h2>
+      <div id="providers"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px" id="cctlPanel">
+      <h2>5. CCTL compare / applied pricing</h2>
+      <div id="cctl" class="scroll"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>6. Timeline</h2>
+      <div class="row">
+        <input type="text" id="tlSearch" placeholder="Lọc theo logic / trigger / hotel_id..." />
+        <label><input type="checkbox" id="tlOnlyDrop" /> Chỉ step làm giảm rate</label>
+        <label><input type="checkbox" id="tlHidePricing" checked /> Ẩn HUB_RATE_APPLIED_PRICING / CCTL_RATE_COMPARE</label>
+      </div>
+      <div class="scroll" style="margin-top:8px"><table id="timeline"></table></div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ---------- Knowledge base: Logic code -> category / severity / ý nghĩa / cần verify ----------
+// sev "drop": chỉ tạo finding khi step làm giảm số rate (from > to).
+const KB = {
+  // Provider
+  PROVIDER_API_ERROR: ["Provider", "error", "Provider API trả lỗi.", "Xem log provider theo trigger, kiểm tra credential/timeout/endpoint của provider."],
+  PROVIDER_RESPONSE_EMPTY_HOTELS: ["Provider", "warn", "Provider không trả hotel nào.", "Kiểm tra mapping hotel_id → provider_hotel_id, ngày ở, occupancy; gọi thẳng provider để đối chiếu."],
+  PROVIDER_RESPONSE_EMPTY_ROOMS: ["Provider", "warn", "Provider trả hotel nhưng không có room.", "Đối chiếu raw response provider; kiểm tra occupancy/số khách vượt sức chứa."],
+  PROVIDER_RESPONSE_EMPTY_RATES: ["Provider", "warn", "Provider trả room nhưng không có rate.", "Đối chiếu raw response provider; kiểm tra rate plan bị provider đóng."],
+  PROVIDER_SEARCH_SKIP_EMPTY_PROVIDER_DATA: ["Provider", "info", "Bỏ qua search provider vì không có provider data (không có mapping).", "Kiểm tra hotel có mapping với provider này không."],
+  PROVIDER_SEARCH_SKIP_V2_PREFETCH_MARKER: ["Provider", "info", "Bỏ qua search vì CA v2 đã prefetch.", "Nếu kết quả sai, so với step PROVIDER_RESULT_FROM_V2_MULTI_PREFETCH."],
+  PROVIDER_SELECTION_REDUCED: ["Provider", "warn", "Danh sách provider bị thu hẹp.", "Kiểm tra config provider enable cho office/TA và trigger chứa danh sách provider."],
+  FILTERED_BY_PROVIDER_NOT_IN_TOP_N_PRICE: ["Provider", "warn", "Provider bị loại vì không nằm trong top N giá.", "Kiểm tra config top N và giá các provider khác."],
+  PROVIDER_REMOVED_SAME_DAY_HCM: ["Provider", "warn", "Provider bị loại cho booking same-day (giờ HCM).", "Kiểm tra check_in = hôm nay và rule same-day của provider."],
+  PROVIDER_PRICE_COMPARE_MIN: ["Provider", "info", "Chọn provider theo giá min.", "Đối chiếu giá giữa các provider nếu kết quả chọn sai provider."],
+  SKIPPED_PROVIDER_TA_OUTSIDE_ACTIVE_TIME: ["Provider", "warn", "Provider TA bị skip do ngoài khung giờ active.", "Kiểm tra config active time của TA và giờ hiện tại."],
+  TA_OUTSIDE_ACTIVE_TIME_FORCE_ENABLED: ["Provider", "info", "Ngoài giờ active nhưng TA được force enable.", "Xác nhận force enable là cố ý."],
+  TA_ACTIVE_TIME_CHECK_DISABLED: ["Provider", "info", "Check active time của TA đang tắt.", "Xác nhận config tắt check là cố ý."],
+  RATES_AFTER_PROVIDER_SEARCH: ["Provider", "drop", "Rate giảm sau bước provider search.", "So sánh số rate từng provider."],
+  RATES_AFTER_PROVIDER_SELECTION: ["Provider", "drop", "Rate giảm sau bước chọn provider.", "Kiểm tra logic SelectBestProvider và config provider."],
+
+  // Early filter / config
+  EARLY_SKIP_ALL_HOTELS_BLOCKED_LIST: ["Early filter", "error", "Toàn bộ hotel bị chặn bởi early empty blocked list.", "Kiểm tra hotel có trong blocked list (empty cache) không; xoá cache nếu sai."],
+  EARLY_SKIP_ALL_HOTELS_SOLD_OUT: ["Early filter", "error", "Toàn bộ hotel bị đánh sold-out từ trước (early).", "Kiểm tra sold_out (redis/mongo) theo hotel + check_in/check_out."],
+  EARLY_SKIP_ALL_HOTELS_EXCLUDED: ["Early filter", "error", "Toàn bộ hotel bị loại ở early filter (config/inactive...).", "Xem các step FILTERED_BY_* phía trước để biết config nào match."],
+  EARLY_SKIP_ALL_PROVIDERS_INACTIVE_FILTER: ["Early filter", "error", "Tất cả provider bị loại bởi inactive hotel config.", "Kiểm tra record_ids (config ID) trong collection filter hotel config."],
+  FILTERED_BY_INACTIVE_HOTEL_CONFIG: ["Early filter", "warn", "Hotel/provider bị loại bởi inactive hotel config.", "Kiểm tra config ID trong record_ids có đúng không."],
+  FILTERED_BY_FILTER_HOTEL_CONFIG: ["Early filter", "warn", "Bị loại bởi filter config loại HOTEL.", "Kiểm tra config ID trong record_ids."],
+  FILTERED_BY_FILTER_REGION_CONFIG: ["Early filter", "warn", "Bị loại bởi filter config loại REGION.", "Kiểm tra country_code/region của hotel và config ID."],
+  FILTERED_BY_HOTEL_NATIONALITY_CONFIG: ["Early filter", "warn", "Bị loại bởi config nationality.", "Kiểm tra nationality trong request và config nationality của hotel."],
+  FILTERED_BY_EARLY_EMPTY_BLOCKED_HOTEL_LIST: ["Early filter", "warn", "Hotel nằm trong early empty blocked list.", "Kiểm tra key blocked list và TTL."],
+  FILTERED_BY_HOTEL_WIDE_SOLD_OUT_EARLY: ["Early filter", "warn", "Hotel bị sold-out toàn bộ (early).", "Kiểm tra record sold-out cấp hotel theo ngày ở."],
+
+  // Cache / CA v2
+  CACHE_HIT_PROVIDER_SEARCH_HOTELS: ["Cache", "info", "Kết quả provider lấy từ cache.", "Nếu nghi dữ liệu cũ, gọi lại với header no-cache để so sánh."],
+  CACHE_SKIP_ALL_PROVIDERS_CRAWLER: ["Cache", "info", "Office crawler: bỏ qua cache cho mọi provider.", "Xác nhận office là crawler."],
+  CACHE_ROWS_DROPPED_BY_AGODA_RULES: ["Cache", "warn", "Row cache bị loại bởi rule Agoda.", "Kiểm tra rule cutoff/buffer Agoda."],
+  SEARCH_CACHED_REUSED_FROM_V2_PREFETCH: ["Cache", "info", "Dùng lại kết quả prefetch CA v2.", "So sánh với request không qua v2 nếu kết quả khác."],
+  PROVIDER_RESULT_FROM_V2_MULTI_PREFETCH: ["Cache", "info", "Kết quả provider từ CA v2 multi prefetch.", ""],
+  CA_V2_MULTI_HOTEL_PREFETCH_DONE: ["Cache", "info", "CA v2 prefetch nhiều hotel xong.", ""],
+  CA_V2_MULTI_PREFETCH_CHUNK_SKIP: ["Cache", "warn", "Một chunk prefetch CA v2 bị skip.", "Kiểm tra trigger để biết lý do skip chunk."],
+  CA_V2_MULTI_PARTIAL_HOTEL_MISS: ["Cache", "warn", "Prefetch CA v2 thiếu một phần hotel.", "Kiểm tra hotel nào bị miss trong trigger."],
+  CA_V2_BATCH_SOLD_OUT_FILTER: ["Sold out", "drop", "Rate bị loại bởi sold-out filter của batch CA v2.", "Kiểm tra sold_out_rooms theo ngày ở."],
+
+  // Sold out
+  RATES_AFTER_SOLD_OUT_ROOM_FILTER: ["Sold out", "drop", "Rate bị loại bởi sold_out_rooms (redis+mongo).", "Tìm record sold_out_rooms theo hotel/room + check_in/check_out trong trigger; xác nhận record còn hiệu lực."],
+  RATES_AFTER_SOLD_OUT_FILTER: ["Sold out", "drop", "Rate bị loại vì cờ is_sold_out.", "Xem CALC_PRICES_SOLD_OUT_FLAGS_* để biết provider đánh sold-out bao nhiêu rate."],
+  RATES_DROPPED_SOLD_OUT_FLAGS_IN_CALC_PRICES: ["Sold out", "drop", "Rate có cờ sold-out bị drop trong calc prices.", "Kiểm tra raw provider có đánh sold-out thật không."],
+  POST_PROCESS_SOLD_OUT_SKIPPED_BATCH_PREFILTER: ["Sold out", "info", "Bỏ qua sold-out filter vì batch CA v2 đã lọc trước.", ""],
+  RECORDED_AS_SOLD_OUT: ["Sold out", "info", "Kết quả rỗng đã được ghi nhận sold-out.", "Lần gọi sau có thể bị early skip do record này."],
+  ROOMS_EXCEED_ADULTS_AMOUNT: ["Occupancy", "drop", "Room bị loại do số người lớn vượt sức chứa.", "Kiểm tra occupancy của room content và số adults request."],
+  FILTERED_BY_INVALID_AVAILABLE_ROOM_VALUE: ["Occupancy", "warn", "Rate bị loại do available room không hợp lệ.", "Kiểm tra field remaining/available room trong raw provider."],
+
+  // Pricing
+  CALC_PRICES_FAILED: ["Pricing", "error", "Tính giá thất bại.", "Xem log price-service / trigger lỗi."],
+  CURRENCY_CONVERT_FAILED_IN_CALC_PRICES: ["Pricing", "error", "Quy đổi tiền tệ thất bại khi tính giá.", "Kiểm tra tỷ giá cho cặp currency trong trigger."],
+  HIDDEN_FEE_CALC_FAILED_IN_CALC_PRICES: ["Pricing", "error", "Tính hidden fee thất bại.", "Kiểm tra config hidden fee của office/hotel."],
+  CALC_PRICES_SKIPPED: ["Pricing", "warn", "Bỏ qua bước tính giá.", "Xác nhận lý do skip trong trigger."],
+  HIDDEN_FEE_DEFERRED_FOR_CCTL: ["Pricing", "info", "Hidden fee được hoãn để tính ở stage CCTL cuối.", ""],
+  RATES_AFTER_CALCULATE_PRICES: ["Pricing", "drop", "Rate giảm sau calculate prices.", "Kiểm tra lỗi tính giá / sold-out flags."],
+  RATES_AFTER_CURRENCY_CONVERT: ["Pricing", "drop", "Rate giảm sau quy đổi tiền tệ.", "Kiểm tra tỷ giá."],
+  RATES_AFTER_CURRENCY_CONVERT_IN_CALC_PRICES: ["Pricing", "drop", "Rate giảm khi quy đổi tiền tệ trong calc prices.", "Kiểm tra tỷ giá."],
+  RATES_AFTER_HIDDEN_FEE_IN_CALC_PRICES: ["Pricing", "drop", "Rate giảm khi áp hidden fee.", "Kiểm tra config hidden fee."],
+  RATES_AFTER_GROUP_RATE_DATA: ["Pricing", "drop", "Rate giảm sau group rate data.", "Kiểm tra rate trùng bị gộp."],
+  RATES_AFTER_MERGE_MULTI_ROOM: ["Pricing", "drop", "Rate giảm khi merge multi room.", "Kiểm tra request nhiều phòng: rate phải có đủ cho mọi occupancy."],
+
+  // CCTL
+  RATES_AFTER_CCTL_NO_OTA_DROP_TA: ["CCTL", "drop", "Rate TA bị drop vì không có OTA.", "Kiểm tra mapping TA ↔ OTA và OTA có rate sống không."],
+  RATES_AFTER_CCTL_PRICING_AT_END: ["CCTL", "drop", "Rate giảm ở stage CCTL pricing cuối.", "Xem CCTL_RATE_COMPARE."],
+
+  // Agoda
+  AGODA_REMOVED_CUTOFF_HOURS: ["Agoda", "warn", "Rate Agoda bị loại do cutoff hours.", "Kiểm tra giờ check-in và config cutoff."],
+  FILTERED_BY_AGODA_REMAINING_ROOM_BUFFER: ["Agoda", "warn", "Rate Agoda bị loại do remaining room < buffer.", "Kiểm tra remaining room trong raw và config buffer."],
+  RATES_AFTER_AGODA_RULES: ["Agoda", "drop", "Rate giảm sau rule Agoda.", "Xem AGODA_REMOVED_CUTOFF_HOURS / FILTERED_BY_AGODA_REMAINING_ROOM_BUFFER."],
+
+  // TLTC
+  TLTC_ROOM_MAPPINGS_QUERY_ERROR: ["TLTC", "error", "Query room_mappings lỗi.", "Kiểm tra kết nối Mongo và query trong step."],
+  TLTC_ROOM_MAPPINGS_DEPS_ERROR: ["TLTC", "error", "Thiếu dependency khi load room_mappings.", "Kiểm tra wiring service room mapping."],
+  TLTC_ROOM_MAPPINGS_QUERY_EMPTY: ["TLTC", "warn", "Query room_mappings không có kết quả.", "Kiểm tra hotel có record room_mappings không (mongo:room_mappings)."],
+  TLTC_ROOM_MAPPINGS_LOAD_EMPTY: ["TLTC", "warn", "Load room_mappings rỗng.", "Kiểm tra dữ liệu room_mappings cho hotel."],
+  TLTC_ROOM_MAPPINGS_SKIPPED: ["TLTC", "info", "Bỏ qua load room_mappings.", "Xác nhận lý do trong trigger."],
+  TLTC_REMAINING_ROOM_FILTERED: ["TLTC", "warn", "Room bị loại theo remaining room (TLTC).", "Kiểm tra remaining room của OTA/TA."],
+  TLTC_PASS2_OTA_ROOM_FILTERED: ["TLTC", "warn", "Room OTA bị loại ở pass 2.", "Kiểm tra mapping OTA room."],
+  TLTC_PASS2_OTA_RATE_FILTERED: ["TLTC", "warn", "Rate OTA bị loại ở pass 2.", "Kiểm tra trigger lý do."],
+  TLTC_PASS2_OTA_COMPARE_PRICE_KEPT: ["TLTC", "info", "Rate OTA được giữ sau compare price.", ""],
+  TLTC_PASS2_OTA_RATE_COMPARE_PRICE_PASS: ["TLTC", "info", "Rate OTA pass compare price.", ""],
+  TLTC_PASS2_OTA_RATE_NO_TA_BENCHMARK: ["TLTC", "warn", "Rate OTA bị loại vì không có giá TA để so.", "Kiểm tra TA có rate tương ứng (mapping) không."],
+  TLTC_PASS2_OTA_RATE_COMPARE_PRICE_FAIL: ["TLTC", "warn", "Rate OTA bị loại vì giá kém hơn TA.", "Đối chiếu giá OTA vs TA trong trigger."],
+  FILTERED_TA_ROOM_WITHOUT_OTA_MAPPING: ["TLTC", "warn", "TA room bị loại vì không có mapping OTA.", "Kiểm tra room_mappings cho TA room."],
+  KEPT_TA_ROOM_WITH_PRICED_OTA_MAPPING: ["TLTC", "info", "TA room được giữ vì có OTA mapping có giá.", ""],
+  FILTERED_BY_OTA_UNAVAILABLE_TA_REMOVED: ["TLTC", "warn", "TA bị loại vì OTA đối ứng không khả dụng.", "Kiểm tra OTA có rate sống cho room mapping."],
+  TA_ROOM_MAPPING_FINAL_FILTER_STARTED: ["TLTC", "info", "Bắt đầu final filter TA room mapping.", ""],
+  RATES_BEFORE_TLTC_PASS2: ["TLTC", "drop", "", ""],
+  RATES_AFTER_TLTC_PASS2: ["TLTC", "drop", "Rate giảm sau TLTC pass 2.", "Xem các step RATES_AFTER_TLTC_PASS2_* chi tiết."],
+  RATES_AFTER_TLTC_PASS2_NO_RATES: ["TLTC", "drop", "Pass 2 không còn rate.", ""],
+  RATES_AFTER_TLTC_PASS2_NO_ROOM_MAPPING: ["TLTC", "drop", "Rate bị loại vì hotel không có room mapping.", "Kiểm tra mongo:room_mappings."],
+  RATES_AFTER_TLTC_PASS2_RATE_TYPE_FILTER: ["TLTC", "drop", "Rate bị loại theo rate type filter.", "Kiểm tra filter rate type của request/office."],
+  RATES_AFTER_TLTC_PASS2_OTA_MAPPING_FILTER: ["TLTC", "drop", "Rate OTA bị loại vì không có mapping.", "Kiểm tra room_mappings OTA."],
+  RATES_AFTER_TLTC_PASS2_OTA_SOLD_OUT_FILTER: ["TLTC", "drop", "Rate OTA bị loại do sold-out.", "Kiểm tra sold_out_rooms OTA."],
+  RATES_AFTER_TLTC_PASS2_OTA_REMAINING_FILTER: ["TLTC", "drop", "Rate OTA bị loại do remaining room.", "Kiểm tra remaining room/buffer."],
+  RATES_AFTER_TLTC_PASS2_SELECT_BEST_PROVIDER: ["TLTC", "drop", "Rate bị loại khi chọn best provider.", "Đối chiếu giá giữa provider."],
+  RATES_AFTER_TLTC_PASS2_TA_MAPPING_FILTER: ["TLTC", "drop", "Rate TA bị loại ở TA mapping final filter.", "Kiểm tra mapping TA ↔ OTA."],
+  RATES_AFTER_TLTC_PASS2_OTA_COMPARE_PRICE_FILTER: ["TLTC", "drop", "Rate OTA bị loại khi so giá với TA.", "Xem các step TLTC_PASS2_OTA_RATE_*."],
+  RATES_AFTER_TLTC_NO_TA_DROP_ALL: ["TLTC", "drop", "Không có TA → drop toàn bộ.", "Kiểm tra TA provider có trả rate không."],
+
+  // Room group
+  ROOM_GROUP_MATCH_KEY_SEARCH: ["Room group", "info", "Search theo room group match key.", ""],
+  ROOM_GROUP_MONGO_LOADED: ["Room group", "info", "Load room group từ Mongo.", ""],
+  ROOM_GROUP_SELECT_RATE_SKIPPED: ["Room group", "info", "Bỏ qua room group select rate.", "Xác nhận lý do trong trigger."],
+  ROOM_GROUP_SELECT_RATE_BUCKET: ["Room group", "info", "Bucket chọn rate theo room group.", ""],
+  ROOM_GROUP_SELECT_RATE_BUCKET_CANDIDATE: ["Room group", "info", "Candidate trong bucket room group.", ""],
+  ROOM_GROUP_SELECT_RATE_ROOM_FILTERED: ["Room group", "warn", "Room bị loại ở room group select rate.", "Kiểm tra room group mapping và giá trong bucket."],
+  ROOM_GROUP_SELECT_RATE_TA_ROOM: ["Room group", "info", "TA room trong room group select rate.", ""],
+  ROOM_GROUP_SELECT_RATE_TA_ROOM_SKIPPED: ["Room group", "info", "TA room bị skip ở room group select rate.", ""],
+  RATES_BEFORE_ROOM_GROUP_SELECT_RATE: ["Room group", "drop", "", ""],
+  RATES_AFTER_ROOM_GROUP_SELECT_RATE: ["Room group", "drop", "Rate giảm sau room group select rate.", "Kiểm tra room group và các rate bị loại."],
+  ROOM_CONTENT_NOT_FOUND: ["Content", "warn", "Không tìm thấy room content.", "Kiểm tra room content của hotel trong content DB."],
+
+  // Diagnostic / bucket
+  NO_HOTEL_BUCKET: ["Kết quả", "warn", "Không có hotel nào trong kết quả.", ""],
+  RATES_BEFORE_CHECK_AVAILABILITY_POST_PROCESSING: ["Pipeline", "drop", "", ""],
+};
+
+const NO_RATE_BUCKET_TRIGGER = {
+  HOTEL_NOT_RETURNED: "Hotel không được trả về trong response (bucket chung chung).",
+  ROOM_LIST_EMPTY: "Hotel có trả nhưng danh sách room rỗng.",
+  RATE_LIST_EMPTY: "Room có nhưng không còn rate nào.",
+  RECORDED_AS_SOLD_OUT: "Kết quả rỗng đã ghi nhận sold-out.",
+  FILTERED_BY_TLTC_REMAINING_ROOM: "Bị loại bởi TLTC remaining room.",
+};
+
+const SEV_ORDER = { error: 0, warn: 1, info: 2, ok: 3 };
+const SLOW_STEP_MS = 3000;
+const MONEY_EPS = 0.01;
+
+// ---------- Parse / normalize ----------
+function pick(o, ...keys) {
+  for (const k of keys) if (o && o[k] !== undefined && o[k] !== null) return o[k];
+  return undefined;
+}
+
+function isStep(o) {
+  return o && typeof o === "object" && !Array.isArray(o) && typeof pick(o, "Logic", "logic") === "string";
+}
+
+function findTraceArray(root) {
+  if (Array.isArray(root) && root.some(isStep)) return root;
+  if (!root || typeof root !== "object") return null;
+  for (const k of ["trace", "Trace", "trace_steps", "traceSteps", "rate_plan_trace", "steps"]) {
+    if (Array.isArray(root[k]) && root[k].some(isStep)) return root[k];
+  }
+  // Deep search (BFS)
+  const queue = [root];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (Array.isArray(cur)) {
+      if (cur.some(isStep)) return cur;
+      cur.forEach(v => v && typeof v === "object" && queue.push(v));
+    } else if (cur && typeof cur === "object") {
+      Object.values(cur).forEach(v => v && typeof v === "object" && queue.push(v));
+    }
+  }
+  return null;
+}
+
+function findKey(root, key) {
+  const queue = [root];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (!cur || typeof cur !== "object") continue;
+    if (!Array.isArray(cur) && cur[key] !== undefined) return cur[key];
+    Object.values(cur).forEach(v => v && typeof v === "object" && queue.push(v));
+  }
+  return undefined;
+}
+
+function toNum(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeStep(s, idx) {
+  return {
+    idx,
+    logic: pick(s, "Logic", "logic") || "",
+    from: toNum(pick(s, "RatesFrom", "rates_from")),
+    to: toNum(pick(s, "RatesTo", "rates_to")),
+    repo: pick(s, "Repo", "repo") || "",
+    query: pick(s, "Query", "query") || "",
+    trigger: pick(s, "Trigger", "trigger") || "",
+    recordIds: pick(s, "RecordIDs", "record_ids") || [],
+    at: pick(s, "At", "at") || "",
+    data: pick(s, "data", "Data"),
+  };
+}
+
+function parseTrigger(trigger) {
+  const out = {};
+  if (!trigger) return out;
+  for (const part of trigger.split(/[\s|,]+/)) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i)] = part.slice(i + 1);
+  }
+  return out;
+}
+
+function countResponseRates(root) {
+  const hotels = root && !Array.isArray(root) ? root.hotels : undefined;
+  if (!Array.isArray(hotels)) return null;
+  let rates = 0, rooms = 0;
+  for (const h of hotels) {
+    for (const r of (h && h.rooms) || []) {
+      rooms++;
+      rates += ((r && r.rate_data) || []).length + ((r && r.exchanged_rate_data) || []).length;
+    }
+  }
+  return { hotels: hotels.length, rooms, rates };
+}
+
+const isDrop = s => s.from !== null && s.to !== null && s.to < s.from;
+const isZeroDrop = s => s.from !== null && s.from > 0 && s.to === 0;
+const isProviderStep = s => s.repo === "_provider_" && s.query === "handler.search(...)";
+const isPricingStep = s => s.logic === "HUB_RATE_APPLIED_PRICING" || s.logic === "CCTL_RATE_COMPARE";
+const fmt = n => (n === null || n === undefined ? "" : Number(n).toLocaleString("en-US", { maximumFractionDigits: 4 }));
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- Rules (thuần if/else) ----------
+function analyze(steps, ctx) {
+  const F = [];
+  const add = (sev, cat, title, detail, verify, refs) => F.push({ sev, cat, title, detail, verify, refs: refs || [] });
+
+  // R0: trace rỗng
+  if (steps.length === 0) {
+    add("error", "Input", "Trace rỗng", "Không có step nào trong trace.",
+      "Gọi lại với header x-debug-check-availability-trace: 1 (hoặc query debug_trace=1) trên env non-prod.");
+    return F;
+  }
+
+  // R1: root cause = step đầu tiên n→0 (giống ResolveTraceRootKey)
+  const root = steps.find(isZeroDrop);
+  ctx.rootIdx = root ? root.idx : -1;
+  if (root) {
+    const kb = KB[root.logic];
+    add("error", "Root cause", `Rate rơi về 0 tại ${root.logic} (${root.from} → 0)`,
+      (kb && kb[2]) || "Step đầu tiên làm số rate từ >0 về 0.",
+      (kb && kb[3]) || "Kiểm tra logic của step này trong code.", [root.idx]);
+  }
+
+  // R2: kết quả cuối cùng
+  const rateSteps = steps.filter(s => s.to !== null && !isProviderStep(s) && !s.logic.startsWith("HOTELS_"));
+  const last = rateSteps[rateSteps.length - 1];
+  ctx.finalRates = last ? last.to : null;
+  if (last && last.to === 0 && !root) {
+    add("error", "Kết quả", "Kết quả cuối không có rate nào", `Step cuối ${last.logic} có rates_to=0 và chưa từng có rate > 0 trong pipeline.`,
+      "Nguyên nhân nằm trước pipeline: xem provider search / early filter.", [last.idx]);
+  } else if (last && last.to > 0) {
+    add("ok", "Kết quả", `Pipeline kết thúc với ${last.to} rate`, `Step cuối: ${last.logic}.`, "", [last.idx]);
+  }
+
+  // R3: đối chiếu với response
+  if (ctx.response && last) {
+    const r = ctx.response;
+    if (r.rates !== last.to) {
+      add("info", "Kết quả", `Số rate trong response (${r.rates}) khác step cuối trace (${last.to})`,
+        "Count trong trace = rate_data + exchanged_rate_data tại thời điểm step; response có thể đã qua thêm bước sau step cuối.",
+        "Nếu chênh lớn, kiểm tra các bước sau " + last.logic + ".", [last.idx]);
+    } else {
+      add("ok", "Kết quả", "Số rate response khớp step cuối trace", `${r.rates} rate / ${r.rooms} room / ${r.hotels} hotel.`, "");
+    }
+  }
+
+  // R4: provider search
+  const provSteps = steps.filter(isProviderStep);
+  const byProvider = {};
+  for (const s of provSteps) {
+    const t = parseTrigger(s.trigger);
+    const p = t.provider || "?";
+    (byProvider[p] = byProvider[p] || []).push({ s, t });
+  }
+  ctx.providers = byProvider;
+  const provNames = Object.keys(byProvider);
+  const hasCache = steps.some(s => s.logic === "CACHE_HIT_PROVIDER_SEARCH_HOTELS" || s.logic === "SEARCH_CACHED_REUSED_FROM_V2_PREFETCH" || s.logic === "PROVIDER_RESULT_FROM_V2_MULTI_PREFETCH");
+  if (provNames.length === 0) {
+    if (hasCache) {
+      add("info", "Provider", "Không có provider search live, dữ liệu đến từ cache/prefetch", "", "Nếu nghi stale, gọi lại với no-cache.");
+    } else if (!steps.some(s => s.logic.startsWith("EARLY_SKIP_"))) {
+      add("warn", "Provider", "Không thấy step provider search nào", "Không có PROVIDER_RESPONSE_*, không cache hit, không early skip.",
+        "Kiểm tra provider có được enable cho office/TA và hotel có mapping provider.");
+    }
+  } else {
+    const okProv = provNames.filter(p => byProvider[p].some(x => x.s.logic === "PROVIDER_RESPONSE_OK"));
+    const emptyProv = provNames.filter(p => !okProv.includes(p));
+    if (okProv.length === 0) {
+      add("error", "Provider", "Tất cả provider đều không trả rate", `Provider: ${emptyProv.join(", ")}.`,
+        "Gọi trực tiếp provider với cùng hotel/ngày/occupancy; kiểm tra mapping hotel.", provSteps.map(s => s.idx));
+    } else if (emptyProv.length) {
+      add("warn", "Provider", `${emptyProv.length}/${provNames.length} provider không trả rate`, `Rỗng: ${emptyProv.join(", ")}. Có rate: ${okProv.join(", ")}.`,
+        "Xác nhận provider rỗng là đúng thực tế (không phải lỗi mapping).",
+        provSteps.filter(s => s.logic !== "PROVIDER_RESPONSE_OK").map(s => s.idx));
+    } else {
+      add("ok", "Provider", `Tất cả ${provNames.length} provider đều trả rate`, okProv.join(", "), "");
+    }
+  }
+
+  // R5: sold-out flags (trigger total_rates / rates_is_sold_out)
+  for (const s of steps) {
+    if (!/SOLD_OUT_FLAGS/.test(s.logic)) continue;
+    const t = parseTrigger(s.trigger);
+    const total = toNum(t.total_rates), so = toNum(t.rates_is_sold_out);
+    const rooms = toNum(t.rooms), roomsSo = toNum(t.rooms_is_sold_out);
+    if (total > 0 && so === total) {
+      add("error", "Sold out", `Toàn bộ ${total} rate bị đánh is_sold_out (${s.logic})`, s.trigger,
+        "Kiểm tra raw provider có trả sold-out thật; nếu không, kiểm tra logic set cờ is_sold_out.", [s.idx]);
+    } else if (so > 0) {
+      add("warn", "Sold out", `${so}/${total} rate bị đánh is_sold_out (${s.logic})`, s.trigger,
+        "Xác nhận các rate sold-out này đúng thực tế.", [s.idx]);
+    }
+    if (rooms > 0 && roomsSo === rooms) {
+      add("warn", "Sold out", `Toàn bộ ${rooms} room bị đánh is_sold_out (${s.logic})`, s.trigger, "", [s.idx]);
+    }
+  }
+
+  // R6: post-process filter stats trigger
+  for (const s of steps) {
+    const t = parseTrigger(s.trigger);
+    if (t.tltc_removed === undefined && t.avail_parse_fail === undefined) continue;
+    const parts = [];
+    for (const k of ["rooms_skip_sold_out", "rates_skip_sold_out", "tltc_removed", "avail_parse_fail", "agoda_buffer", "rooms_empty_rates"]) {
+      if (toNum(t[k]) > 0) parts.push(`${k}=${t[k]}`);
+    }
+    if (parts.length) add("warn", "Post filter", `Post-process filter loại rate/room (${s.logic})`, parts.join(", "),
+      "avail_parse_fail > 0: kiểm tra định dạng available room của provider; tltc_removed > 0: kiểm tra TLTC remaining.", [s.idx]);
+  }
+
+  // R7: NO_RATE_BUCKET / NO_HOTEL_BUCKET
+  const buckets = {};
+  for (const s of steps) {
+    if (s.logic !== "NO_RATE_BUCKET" && s.logic !== "NO_HOTEL_BUCKET") continue;
+    const key = s.logic + ":" + s.trigger;
+    (buckets[key] = buckets[key] || []).push(s.idx);
+  }
+  for (const [key, refs] of Object.entries(buckets)) {
+    const [logic, trig] = key.split(":");
+    add("warn", "Kết quả", `${logic} = ${trig}` + (refs.length > 1 ? ` (x${refs.length})` : ""),
+      NO_RATE_BUCKET_TRIGGER[trig] || "", "Dùng root cause / các step drop phía trước để xác định lý do cụ thể.", refs);
+  }
+
+  // R7b: request bị filter config (filter_hotel_configs)
+  analyzeFilterConfig(steps, ctx, add);
+
+  // R8: KB theo từng logic code (gộp theo logic)
+  const grouped = {};
+  for (const s of steps) {
+    if (isProviderStep(s) || isPricingStep(s) || s.logic === "NO_RATE_BUCKET" || s.logic === "NO_HOTEL_BUCKET" || FILTER_CONFIG_TYPE[s.logic]) continue;
+    const kb = KB[s.logic];
+    if (!kb) continue;
+    let sev = kb[1];
+    if (sev === "drop") {
+      if (!isDrop(s) || s.idx === ctx.rootIdx) continue;
+      sev = s.to === 0 ? "error" : "warn";
+    }
+    const g = (grouped[s.logic] = grouped[s.logic] || { sev, kb, steps: [] });
+    if (SEV_ORDER[sev] < SEV_ORDER[g.sev]) g.sev = sev;
+    g.steps.push(s);
+  }
+  for (const [logic, g] of Object.entries(grouped)) {
+    const n = g.steps.length;
+    const dropped = g.steps.reduce((a, s) => a + (isDrop(s) ? s.from - s.to : 0), 0);
+    const triggers = [...new Set(g.steps.map(s => s.trigger).filter(Boolean))].slice(0, 5);
+    const ids = [...new Set(g.steps.flatMap(s => s.recordIds))].slice(0, 10);
+    let detail = g.kb[2];
+    if (dropped) detail += ` Tổng rate bị loại: ${dropped}.`;
+    if (triggers.length) detail += "\nTrigger: " + triggers.join(" | ");
+    if (ids.length) detail += "\nrecord_ids: " + ids.join(", ");
+    add(g.sev, g.kb[0], logic + (n > 1 ? ` (x${n})` : ""), detail, g.kb[3], g.steps.map(s => s.idx));
+  }
+
+  // R9: step drop chưa có trong KB
+  const unknownDrops = steps.filter(s => isDrop(s) && !KB[s.logic] && !isProviderStep(s) && s.idx !== ctx.rootIdx && !s.logic.startsWith("HOTELS_"));
+  for (const s of unknownDrops) {
+    add(s.to === 0 ? "error" : "warn", "Pipeline", `Rate giảm tại ${s.logic} (${s.from} → ${s.to})`, s.trigger || s.query,
+      "Logic chưa có rule riêng: đọc query/trigger để xác định filter.", [s.idx]);
+  }
+
+  // R10: hotel count drop (HOTELS_*)
+  for (const s of steps) {
+    if (!s.logic.startsWith("HOTELS_") || !isDrop(s)) continue;
+    add(s.to === 0 ? "error" : "warn", "Hotel filter", `Số hotel giảm tại ${s.logic} (${s.from} → ${s.to})`, s.trigger || s.query,
+      "Kiểm tra hotel nào bị loại và config tương ứng.", [s.idx]);
+  }
+
+  // R11: rate tăng bất thường
+  for (const s of steps) {
+    if (s.from === null || s.to === null || s.to <= s.from) continue;
+    if (isProviderStep(s) || s.logic.startsWith("HOTELS_") || /CURRENCY_CONVERT|PROVIDER_SEARCH|PREFETCH|BEFORE/.test(s.logic)) continue;
+    add("info", "Pipeline", `Rate tăng tại ${s.logic} (${s.from} → ${s.to})`, s.trigger || s.query,
+      "Filter không nên làm tăng rate. Nếu step là snapshot sau nhiều provider/hotel chạy song song thì bỏ qua.", [s.idx]);
+  }
+
+  // R12: step chậm (theo At)
+  const timed = steps.filter(s => s.at && !isNaN(Date.parse(s.at)));
+  for (let i = 1; i < timed.length; i++) {
+    const gap = Date.parse(timed[i].at) - Date.parse(timed[i - 1].at);
+    if (gap >= SLOW_STEP_MS) {
+      add("warn", "Performance", `Khoảng giữa ${timed[i - 1].logic} → ${timed[i].logic} mất ${(gap / 1000).toFixed(2)}s`,
+        "Tính theo field at của 2 step liền nhau có timestamp.", "Kiểm tra latency provider/DB ở đoạn này.", [timed[i - 1].idx, timed[i].idx]);
+    }
+  }
+  if (timed.length >= 2) {
+    ctx.durationMs = Date.parse(timed[timed.length - 1].at) - Date.parse(timed[0].at);
+  }
+
+  // R13: qc_debug_data (room group)
+  const qc = ctx.qc;
+  if (qc) {
+    const rgSteps = steps.filter(s => s.logic.startsWith("ROOM_GROUP_SELECT_RATE")).map(s => s.idx);
+    if (!qc.room_group_select_rate_applied && rgSteps.length && steps.some(s => s.logic === "ROOM_GROUP_SELECT_RATE_ROOM_FILTERED")) {
+      add("error", "Room group", "qc_debug_data.room_group_select_rate_applied=false nhưng trace có ROOM_GROUP_SELECT_RATE_ROOM_FILTERED",
+        "", "Kiểm tra SetRoomGroupQCDebugSelectRateApplied được gọi đúng nhánh.", rgSteps);
+    }
+    if (qc.raw_match_key && qc.appended_match_key && qc.raw_match_key === qc.appended_match_key && (qc.appended_providers || []).length) {
+      add("warn", "Room group", "appended_providers có giá trị nhưng match_key không đổi", `raw=${qc.raw_match_key}`, "Kiểm tra logic append match_key.");
+    }
+    add("info", "Room group", `Room group select rate ${qc.room_group_select_rate_applied ? "ĐÃ" : "KHÔNG"} áp dụng`,
+      `raw_match_key=${qc.raw_match_key || "-"}\nappended_match_key=${qc.appended_match_key || "-"}\nappended_providers=${(qc.appended_providers || []).join(",") || "-"}`, "");
+  }
+
+  // R14: CCTL compare + applied pricing
+  analyzePricing(steps, ctx, add);
+
+  // R15: logic code chưa biết
+  const known = new Set([...Object.keys(KB), "NO_RATE_BUCKET", "NO_HOTEL_BUCKET", "HUB_RATE_APPLIED_PRICING", "CCTL_RATE_COMPARE"]);
+  const unknown = [...new Set(steps.filter(s => !known.has(s.logic) && !isProviderStep(s) && !isDrop(s) && !/SOLD_OUT_FLAGS|^CALC_PRICES_|^POST_PROCESS_|^HOTELS_|^RATES_/.test(s.logic)).map(s => s.logic))];
+  if (unknown.length) {
+    add("info", "Rule", `${unknown.length} logic code chưa có rule`, unknown.join(", "), "Bổ sung vào KB của analyzer nếu cần.");
+  }
+
+  F.sort((a, b) => SEV_ORDER[a.sev] - SEV_ORDER[b.sev]);
+  return F;
+}
+
+const FILTER_CONFIG_TYPE = {
+  FILTERED_BY_INACTIVE_HOTEL_CONFIG: "HOTEL",
+  FILTERED_BY_FILTER_REGION_CONFIG: "REGION",
+  FILTERED_BY_FILTER_HOTEL_CONFIG: "UNKNOWN",
+};
+
+function analyzeFilterConfig(steps, ctx, add) {
+  const hits = steps.filter(s => FILTER_CONFIG_TYPE[s.logic]).map(s => {
+    const t = parseTrigger(s.trigger);
+    return { s, type: FILTER_CONFIG_TYPE[s.logic], provider: t.provider || "?", hotelId: t.hotel_id || "?", country: t.country || "" };
+  });
+  ctx.filterConfigHits = hits;
+  if (!hits.length) return;
+
+  const filteredProviders = [...new Set(hits.map(h => h.provider))];
+  const filteredHotels = [...new Set(hits.map(h => h.hotelId))];
+  const configIds = [...new Set(hits.flatMap(h => h.s.recordIds))];
+  const okProviders = Object.keys(ctx.providers || {}).filter(p => ctx.providers[p].some(x => x.s.logic === "PROVIDER_RESPONSE_OK"));
+  const allSkipped = steps.some(s => s.logic === "EARLY_SKIP_ALL_PROVIDERS_INACTIVE_FILTER" || s.logic === "EARLY_SKIP_ALL_HOTELS_EXCLUDED");
+  const blocked = allSkipped || (okProviders.length === 0 && ctx.finalRates !== null && ctx.finalRates <= 0) || (okProviders.length === 0 && ctx.finalRates === null);
+
+  const byType = hits.reduce((m, h) => ((m[h.type] = (m[h.type] || 0) + 1), m), {});
+  const detail = [
+    `Provider bị filter: ${filteredProviders.join(", ")}`,
+    `Hotel bị filter: ${filteredHotels.join(", ")}`,
+    `Theo loại config: ${Object.entries(byType).map(([k, v]) => `${k}=${v}`).join(", ")}`,
+    configIds.length ? `Config IDs: ${configIds.join(", ")}` : "Không có config ID (FILTERED_BY_FILTER_HOTEL_CONFIG: evaluator không trả được ID theo type)",
+    okProviders.length ? `Provider vẫn trả rate: ${okProviders.join(", ")}` : "Không còn provider nào trả rate",
+  ].join("\n");
+  const query = configIds.length
+    ? `db.filter_hotel_configs.find({ _id: { $in: [${configIds.map(id => `ObjectId("${id}")`).join(", ")}] } })`
+    : "db.filter_hotel_configs.find({ partnership_id: <pid>, deleted_at: { $exists: false } }) theo office của request";
+
+  add(blocked ? "error" : "warn", "Filter config",
+    blocked ? "Request bị chặn bởi filter config (filter_hotel_configs)" : `Request bị filter config một phần (${filteredProviders.length} provider)`,
+    detail,
+    `Xác nhận config có đúng chủ đích (office/partnership, hotel_id, country, provider). Query: ${query}`,
+    hits.map(h => h.s.idx));
+
+  if (hits.some(h => h.type === "UNKNOWN")) {
+    add("warn", "Filter config", "Có hotel bị filter nhưng không xác định được config ID",
+      "Step FILTERED_BY_FILTER_HOTEL_CONFIG chỉ được ghi khi MatchedConfigIDsByType trả nil.",
+      "Kiểm tra evaluator inactive hotel: hotel bị đánh inactive nhưng không match config HOTEL/REGION nào.",
+      hits.filter(h => h.type === "UNKNOWN").map(h => h.s.idx));
+  }
+}
+
+function analyzePricing(steps, ctx, add) {
+  const compares = steps.filter(s => s.logic === "CCTL_RATE_COMPARE" && s.data);
+  const applied = steps.filter(s => s.logic === "HUB_RATE_APPLIED_PRICING" && s.data);
+  ctx.compares = compares;
+  ctx.applied = applied;
+  const appliedByRate = {};
+  for (const s of applied) {
+    const d = s.data;
+    const key = `${d.hotel_id}|${d.room_id}|${d.rate_id}`;
+    (appliedByRate[key] = appliedByRate[key] || []).push(s);
+  }
+
+  let cctlErrors = 0;
+  for (const s of compares) {
+    const d = s.data;
+    const issues = [];
+    const ta = toNum(d.ta_pay_now) || 0;
+    const cp = toNum(d.counterpart_pay_now) || 0;
+    const p = toNum(d.threshold_percent) || 0;
+    const branch = toNum(d.branch_code);
+    let expectBranch;
+    if (d.counterpart_rate_id && cp > 0) {
+      const expectThreshold = cp * (1 + p);
+      if (Math.abs(expectThreshold - (toNum(d.threshold) || 0)) > MONEY_EPS) {
+        issues.push(`threshold=${fmt(d.threshold)} ≠ counterpart_pay_now*(1+p)=${fmt(expectThreshold)}`);
+      }
+      expectBranch = ta > expectThreshold ? 2 : 1;
+      if (toNum(d.tier) === 0) issues.push("có counterpart nhưng tier=0 (TierNone)");
+    } else {
+      expectBranch = 3;
+      if (toNum(d.tier) && toNum(d.tier) !== 0) issues.push(`không có counterpart nhưng tier=${d.tier}`);
+    }
+    if (branch !== expectBranch) issues.push(`branch_code=${branch} (${d.branch}) nhưng theo dữ liệu phải là ${expectBranch}`);
+    if (d.is_cctl !== undefined && Boolean(d.is_cctl) !== (expectBranch === 3)) issues.push(`is_cctl=${d.is_cctl} không khớp nhánh ${expectBranch} (chỉ nhánh 3 is_cctl=true)`);
+    if (ta <= 0) issues.push(`ta_pay_now=${ta} không hợp lệ`);
+    if (p <= 0) issues.push(`threshold_percent=${p} ≤ 0 (code sẽ fallback 0.08)`);
+
+    // so với applied pricing cùng rate
+    const ap = appliedByRate[`${d.hotel_id}|${d.room_id}|${d.rate_id}`];
+    if (!ap) {
+      issues.push("không tìm thấy HUB_RATE_APPLIED_PRICING cùng hotel/room/rate_id (rate có thể đã bị drop sau compare)");
+    } else {
+      for (const a of ap) {
+        const ab = toNum(a.data.cctl_branch_code);
+        if (ab !== null && ab !== branch) issues.push(`applied cctl_branch_code=${ab} ≠ compare branch_code=${branch}`);
+        if (a.data.is_cctl !== undefined && d.is_cctl !== undefined && Boolean(a.data.is_cctl) !== Boolean(d.is_cctl)) issues.push(`applied is_cctl=${a.data.is_cctl} ≠ compare is_cctl=${d.is_cctl}`);
+      }
+    }
+
+    s._issues = issues;
+    if (issues.length) {
+      cctlErrors++;
+      const hard = issues.some(i => !i.startsWith("không tìm thấy"));
+      add(hard ? "error" : "warn", "CCTL", `CCTL compare sai lệch: rate ${d.rate_id}`, issues.join("\n"),
+        "Đối chiếu với cctl.Decide: có counterpart → threshold = OTA*(1+p), TA > threshold ⇒ nhánh 2, ngược lại nhánh 1; không counterpart ⇒ nhánh 3.",
+        [s.idx].concat((ap || []).map(a => a.idx)));
+    }
+    if (toNum(d.tier) === 3) {
+      add("warn", "CCTL", `Rate ${d.rate_id} match counterpart bằng TierGlobalMin (match lỏng)`,
+        `counterpart=${d.counterpart_rate_id} pay_now=${fmt(cp)}`, "Kiểm tra breakfast/refundable của TA và OTA có tương đương không.", [s.idx]);
+    }
+  }
+  if (compares.length && !cctlErrors) {
+    add("ok", "CCTL", `${compares.length} CCTL compare nhất quán với rule Decide`, "", "");
+  }
+
+  let pricingIssues = 0;
+  for (const [key, list] of Object.entries(appliedByRate)) {
+    for (const s of list) {
+      const d = s.data;
+      const issues = [];
+      const payNow = toNum(d.pay_now);
+      if (payNow === null || payNow <= 0) issues.push(`pay_now=${d.pay_now} ≤ 0`);
+      if (!d.currency) issues.push("currency rỗng");
+      for (const k of ["hidden_fee_amount", "instant_confirmed_hidden_fee_amount", "discount_amount"]) {
+        if (toNum(d[k]) < 0) issues.push(`${k}=${d[k]} âm`);
+      }
+      if (payNow > 0 && toNum(d.discount_amount) >= payNow) issues.push(`discount_amount=${d.discount_amount} ≥ pay_now`);
+      if (toNum(d.hidden_fee_amount) > 0 && !d.applied_hidden_fee) issues.push("hidden_fee_amount > 0 nhưng applied_hidden_fee rỗng");
+      if (toNum(d.discount_amount) > 0 && !d.applied_discount) issues.push("discount_amount > 0 nhưng applied_discount rỗng");
+      if (d.pricing_flow === "cctl") {
+        const b = toNum(d.cctl_branch_code);
+        if (!(b >= 1 && b <= 3)) issues.push(`pricing_flow=cctl nhưng cctl_branch_code=${b} (${d.cctl_branch}) không hợp lệ`);
+        if (d.is_cctl !== undefined && b >= 1 && b <= 3 && Boolean(d.is_cctl) !== (b === 3)) issues.push(`is_cctl=${d.is_cctl} không khớp cctl_branch_code=${b}`);
+      }
+      s._issues = issues;
+      if (issues.length) {
+        pricingIssues++;
+        add(issues.some(i => /≤ 0|không hợp lệ|không khớp|âm|≥/.test(i)) ? "error" : "warn", "Applied pricing",
+          `Applied pricing bất thường: rate ${d.rate_id}`, issues.join("\n"), "Kiểm tra config hidden fee / discount và nhánh CCTL của rate.", [s.idx]);
+      }
+    }
+    if (list.length > 1) {
+      const slots = list.map(s => parseTrigger(s.trigger).slot).filter(Boolean);
+      if (new Set(slots).size !== list.length) {
+        add("info", "Applied pricing", `HUB_RATE_APPLIED_PRICING lặp ${list.length} lần cho ${key}`, "",
+          "Có thể trace bị append trùng (command defer + HTTP), hoặc nhiều occupancy dùng chung rate_id.", list.map(s => s.idx));
+      }
+    }
+  }
+  if (applied.length && !pricingIssues) {
+    add("ok", "Applied pricing", `${applied.length} rate applied pricing hợp lệ`, "", "");
+  }
+}
+
+// ---------- Render ----------
+let state = null;
+
+function render() {
+  const { steps, findings, ctx } = state;
+  document.getElementById("out").classList.remove("hidden");
+
+  const counts = { error: 0, warn: 0, info: 0, ok: 0 };
+  findings.forEach(f => counts[f.sev]++);
+  const stats = [
+    ["Tổng step", steps.length],
+    ["Rate cuối pipeline", ctx.finalRates ?? "-"],
+    ["Root cause", ctx.rootIdx >= 0 ? steps[ctx.rootIdx].logic : "-"],
+    ["Provider", Object.keys(ctx.providers || {}).length],
+    ["Bị filter config", (ctx.filterConfigHits || []).length ? `CÓ (${ctx.filterConfigHits.length} step)` : "Không"],
+    ["Error / Warn", `${counts.error} / ${counts.warn}`],
+    ["Thời gian (theo at)", ctx.durationMs != null ? (ctx.durationMs / 1000).toFixed(2) + "s" : "-"],
+  ];
+  if (ctx.response) stats.push(["Response", `${ctx.response.hotels} hotel / ${ctx.response.rooms} room / ${ctx.response.rates} rate`]);
+  document.getElementById("stats").innerHTML = stats.map(([k, v]) => `<div class="stat"><small>${esc(k)}</small><b class="mono" style="font-size:${String(v).length > 18 ? 13 : 20}px">${esc(v)}</b></div>`).join("");
+
+  renderFindings();
+  renderFilterConfig();
+  renderProviders();
+  renderCCTL();
+  renderTimeline();
+}
+
+function refLinks(refs) {
+  if (!refs.length) return "";
+  return " · step " + refs.slice(0, 15).map(i => `<a class="ref" data-idx="${i}">#${i}</a>`).join(", ") + (refs.length > 15 ? "…" : "");
+}
+
+function renderFindings() {
+  const on = new Set([...document.querySelectorAll("#sevFilters input:checked")].map(i => i.value));
+  const html = state.findings.filter(f => on.has(f.sev)).map(f => `
+    <div class="finding ${f.sev}">
+      <div class="title"><span class="badge ${f.sev}">${f.sev}</span><span class="cat">[${esc(f.cat)}]</span>${esc(f.title)}</div>
+      ${f.detail ? `<pre>${esc(f.detail)}</pre>` : ""}
+      ${f.verify ? `<div class="verify">→ Verify: ${esc(f.verify)}</div>` : ""}
+      <div class="meta">${refLinks(f.refs)}</div>
+    </div>`).join("");
+  document.getElementById("findings").innerHTML = html || '<div class="meta">Không có finding nào ở mức đã chọn.</div>';
+}
+
+function renderFilterConfig() {
+  const hits = state.ctx.filterConfigHits || [];
+  document.getElementById("filterConfigPanel").classList.toggle("hidden", hits.length === 0);
+  document.getElementById("filterConfig").innerHTML = `<table><tr><th>Step</th><th>Logic</th><th>Loại config</th><th>Provider</th><th>Hotel</th><th>Country</th><th>Config IDs</th></tr>` +
+    hits.map(h => `<tr class="drop"><td><a class="ref" data-idx="${h.s.idx}">#${h.s.idx}</a></td><td class="mono">${esc(h.s.logic)}</td><td>${esc(h.type)}</td>
+      <td>${esc(h.provider)}</td><td class="mono">${esc(h.hotelId)}</td><td>${esc(h.country)}</td><td class="mono">${esc(h.s.recordIds.join(", ") || "-")}</td></tr>`).join("") + "</table>";
+}
+
+function renderProviders() {
+  const p = state.ctx.providers || {};
+  const rows = [];
+  for (const [name, list] of Object.entries(p)) {
+    for (const { s, t } of list) {
+      rows.push(`<tr class="${s.logic === "PROVIDER_RESPONSE_OK" ? "" : "drop"}"><td>${esc(name)}</td><td class="mono">${esc(s.logic)}</td><td>${esc(t.hotels)}</td><td>${esc(t.rooms)}</td><td>${esc(t.rates)}</td><td><a class="ref" data-idx="${s.idx}">#${s.idx}</a></td></tr>`);
+    }
+  }
+  document.getElementById("providerPanel").classList.toggle("hidden", rows.length === 0);
+  document.getElementById("providers").innerHTML = `<table><tr><th>Provider</th><th>Kết quả</th><th>Hotels</th><th>Rooms</th><th>Rates</th><th>Step</th></tr>${rows.join("")}</table>`;
+}
+
+function renderCCTL() {
+  const { compares = [], applied = [] } = state.ctx;
+  document.getElementById("cctlPanel").classList.toggle("hidden", !compares.length && !applied.length);
+  let html = "";
+  if (compares.length) {
+    html += `<table><tr><th>#</th><th>hotel / room / rate</th><th>TA pay_now</th><th>Counterpart</th><th>p</th><th>Threshold</th><th>Tier</th><th>Branch</th><th>is_cctl</th><th>Vấn đề</th></tr>` +
+      compares.map(s => {
+        const d = s.data;
+        return `<tr class="${s._issues && s._issues.length ? "zero" : ""}"><td><a class="ref" data-idx="${s.idx}">#${s.idx}</a></td>
+          <td class="mono">${esc(d.hotel_id)}<br>${esc(d.room_id)}<br>${esc(d.rate_id)}</td>
+          <td>${fmt(d.ta_pay_now)}</td><td class="mono">${esc(d.counterpart_rate_id || "-")}<br>${fmt(d.counterpart_pay_now)}</td>
+          <td>${fmt(d.threshold_percent)}</td><td>${fmt(d.threshold)}</td><td>${esc(d.tier)}</td><td>${esc(d.branch)}</td><td>${esc(d.is_cctl)}</td>
+          <td>${esc((s._issues || []).join("; "))}</td></tr>`;
+      }).join("") + "</table>";
+  }
+  if (applied.length) {
+    html += `<table style="margin-top:12px"><tr><th>#</th><th>hotel / room / rate</th><th>pay_now</th><th>hidden_fee</th><th>ic_hidden_fee</th><th>discount</th><th>flow</th><th>cctl_branch</th><th>is_cctl</th><th>Vấn đề</th></tr>` +
+      applied.map(s => {
+        const d = s.data;
+        return `<tr class="${s._issues && s._issues.length ? "zero" : ""}"><td><a class="ref" data-idx="${s.idx}">#${s.idx}</a></td>
+          <td class="mono">${esc(d.hotel_id)}<br>${esc(d.room_id)}<br>${esc(d.rate_id)}</td>
+          <td>${fmt(d.pay_now)} ${esc(d.currency)}</td><td>${fmt(d.hidden_fee_amount)}</td><td>${fmt(d.instant_confirmed_hidden_fee_amount)}</td><td>${fmt(d.discount_amount)}</td>
+          <td>${esc(d.pricing_flow || "-")}${d.delta_percent != null ? "<br>Δ " + fmt(d.delta_percent) : ""}</td><td>${esc(d.cctl_branch)}</td><td>${esc(d.is_cctl ?? "-")}</td>
+          <td>${esc((s._issues || []).join("; "))}</td></tr>`;
+      }).join("") + "</table>";
+  }
+  document.getElementById("cctl").innerHTML = html;
+}
+
+function renderTimeline() {
+  const q = document.getElementById("tlSearch").value.trim().toLowerCase();
+  const onlyDrop = document.getElementById("tlOnlyDrop").checked;
+  const hidePricing = document.getElementById("tlHidePricing").checked;
+  const rows = state.steps.filter(s => {
+    if (onlyDrop && !isDrop(s)) return false;
+    if (hidePricing && isPricingStep(s)) return false;
+    if (q && !(`${s.logic} ${s.trigger} ${s.query} ${s.repo} ${s.recordIds.join(" ")}`.toLowerCase().includes(q))) return false;
+    return true;
+  }).map(s => {
+    const cls = [s.idx === state.ctx.rootIdx ? "root" : "", s.to === 0 && isDrop(s) ? "zero" : isDrop(s) ? "drop" : ""].join(" ");
+    const delta = s.from !== null && s.to !== null ? s.to - s.from : null;
+    return `<tr id="step-${s.idx}" class="${cls}">
+      <td>${s.idx}</td><td class="mono">${esc(s.logic)}</td>
+      <td>${s.from ?? ""}${s.from !== null || s.to !== null ? " → " : ""}${s.to ?? ""}</td>
+      <td>${delta === null || delta === 0 ? "" : (delta > 0 ? "+" : "") + delta}</td>
+      <td class="mono">${esc(s.repo)}<br>${esc(s.query)}</td>
+      <td class="mono">${esc(s.trigger)}${s.recordIds.length ? "<br>ids: " + esc(s.recordIds.join(", ")) : ""}</td>
+      <td class="mono">${esc(s.at ? s.at.replace(/^.*T/, "") : "")}</td>
+      <td>${s.data ? `<details><summary>data</summary><pre>${esc(JSON.stringify(s.data, null, 2))}</pre></details>` : ""}</td>
+    </tr>`;
+  });
+  document.getElementById("timeline").innerHTML =
+    `<tr><th>#</th><th>Logic</th><th>Rates</th><th>Δ</th><th>Repo / Query</th><th>Trigger</th><th>At</th><th>Data</th></tr>` + rows.join("");
+}
+
+function run() {
+  const errEl = document.getElementById("parseError");
+  errEl.textContent = "";
+  const text = document.getElementById("input").value.trim();
+  if (!text) { errEl.textContent = "Chưa có dữ liệu."; return; }
+  let root;
+  try {
+    root = JSON.parse(text);
+  } catch (e) {
+    errEl.textContent = "JSON không hợp lệ: " + e.message;
+    return;
+  }
+  const arr = findTraceArray(root);
+  if (!arr) {
+    errEl.textContent = "Không tìm thấy mảng trace (object có field Logic/logic).";
+    return;
+  }
+  const steps = arr.filter(isStep).map(normalizeStep);
+  const ctx = {
+    response: countResponseRates(root),
+    qc: findKey(root, "qc_debug_data") || null,
+  };
+  const findings = analyze(steps, ctx);
+  state = { steps, findings, ctx };
+  render();
+}
+
+document.getElementById("btnAnalyze").addEventListener("click", run);
+document.getElementById("btnClear").addEventListener("click", () => {
+  document.getElementById("input").value = "";
+  document.getElementById("out").classList.add("hidden");
+  document.getElementById("parseError").textContent = "";
+});
+document.getElementById("file").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  f.text().then(t => { document.getElementById("input").value = t; run(); });
+  e.target.value = "";
+});
+document.getElementById("sevFilters").addEventListener("change", () => state && renderFindings());
+["tlSearch", "tlOnlyDrop", "tlHidePricing"].forEach(id =>
+  document.getElementById(id).addEventListener("input", () => state && renderTimeline()));
+document.addEventListener("click", e => {
+  const a = e.target.closest("a.ref");
+  if (!a) return;
+  const idx = Number(a.dataset.idx);
+  const s = state.steps[idx];
+  if (s && isPricingStep(s)) document.getElementById("tlHidePricing").checked = false;
+  document.getElementById("tlSearch").value = "";
+  document.getElementById("tlOnlyDrop").checked = false;
+  renderTimeline();
+  const row = document.getElementById("step-" + idx);
+  if (row) { row.scrollIntoView({ behavior: "smooth", block: "center" }); row.style.outline = "2px solid #4fa3ff"; setTimeout(() => (row.style.outline = ""), 1500); }
+});
+</script>
+</body>
+</html>
